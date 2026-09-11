@@ -22,6 +22,7 @@
 //! The origin URI carries what the headers knew:
 //! `as2://peer/path?from=Buyer&message-id=1.2@buyer`.
 
+pub mod loopback;
 pub mod mdn;
 pub mod message;
 pub mod signer;
@@ -236,6 +237,7 @@ impl Transport for As2Transport {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+    use transport::loopback::Loopback;
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
@@ -250,28 +252,51 @@ mod tests {
 
     #[test]
     fn a_message_is_posted_and_its_receipt_carries_the_mic_back() {
-        let (far_end, listener, address) = far_end();
-        let long = vec![0x2a; 200_000];
-        let sent = long.clone();
-        let sender = std::thread::spawn(move || {
-            let near = As2Transport::new(format!("as2://{address}/as2"), "Buyer", "Seller")
-                .timing_out_after(secs(2));
-            near.send("", b"ISA*00*")?;
-            near.send(&format!("http://{address}/as2"), &sent)?;
-            near.send("", b"")
-        });
-        let first = far_end.accept_one(&listener).expect("first");
+        let loopback = As2Transport::loopback();
+        let first = loopback.round(b"ISA*00*").expect("first");
         assert_eq!(first.bytes, b"ISA*00*");
         assert!(first.origin_uri.starts_with("as2://127.0.0.1:"));
         assert!(first.origin_uri.contains("/as2?from=Buyer&message-id="));
-        let second = far_end.accept_one(&listener).expect("second");
-        assert_eq!(second.bytes, long);
-        let third = far_end.accept_one(&listener).expect("third");
-        assert!(third.bytes.is_empty());
-        sender.join().expect("thread").expect("three sends");
-        assert_eq!(far_end.name(), "as2");
-        assert_eq!(far_end.directions(), Directions::BOTH);
-        assert!(far_end.claims().is_none());
+        let long = vec![0x2a; 200_000];
+        assert_eq!(loopback.round(&long).expect("second").bytes, long);
+        assert!(loopback.round(b"").expect("third").bytes.is_empty());
+        assert_eq!(loopback.name(), "as2");
+        assert_eq!(loopback.directions(), Directions::BOTH);
+        assert!(loopback.claims().is_none());
+        assert!(loopback.ceiling().is_none());
+        assert!(loopback.refuses(b"ISA").is_none());
+    }
+
+    #[test]
+    fn a_target_may_name_the_partners_endpoint_itself() {
+        let (far_end, listener, address) = far_end();
+        let sender = std::thread::spawn(move || {
+            As2Transport::new("as2://127.0.0.1:0/as2", "Buyer", "Seller")
+                .timing_out_after(secs(2))
+                .send(&format!("http://{address}/as2"), b"ISA")
+        });
+        assert_eq!(far_end.accept_one(&listener).expect("named").bytes, b"ISA");
+        sender.join().expect("thread").expect("sent");
+    }
+
+    #[test]
+    fn the_loopback_returns_the_edges_whole() {
+        let loopback = As2Transport::loopback();
+        let edges: [(&str, Vec<u8>); 6] = [
+            ("empty", Vec::new()),
+            ("one byte", vec![0x2a]),
+            ("every byte", (0..=255).collect()),
+            ("nul run", vec![0; 512]),
+            ("high bytes", vec![0xff; 512]),
+            ("crlf storm", b"\r\n".repeat(400)),
+        ];
+        for (name, payload) in edges {
+            assert_eq!(
+                loopback.round(&payload).expect(name).bytes,
+                payload,
+                "{name}"
+            );
+        }
     }
 
     #[test]
