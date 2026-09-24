@@ -9,6 +9,7 @@
 
 use std::fmt::Write;
 
+use codec::base64;
 use transport::error::{Result, protocol_error};
 
 use crate::signer::Entity;
@@ -72,7 +73,7 @@ impl Mdn {
             let _ = write!(
                 fields,
                 "Received-Content-MIC: {}, {micalg}\r\n",
-                base64(mic)
+                base64::encode(mic)
             );
         }
         let body = format!(
@@ -116,7 +117,8 @@ impl Mdn {
         };
         let mic = field("Received-Content-MIC").and_then(|value| {
             let (digest, micalg) = value.split_once(',')?;
-            Some((unbase64(digest.trim())?, micalg.trim().to_ascii_lowercase()))
+            let digest = base64::decode(digest.trim()).ok()?;
+            Some((digest, micalg.trim().to_ascii_lowercase()))
         });
         Ok(Self {
             original_message_id: field("Original-Message-ID")
@@ -146,53 +148,6 @@ fn boundary_of(content_type: &str) -> Result<String> {
         .find_map(|parameter| parameter.strip_prefix("boundary="))
         .map(|value| value.trim_matches('"').to_string())
         .ok_or_else(|| protocol_error("a multipart report with no boundary"))
-}
-
-const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-/// `bytes` in base64, as the MIC travels (RFC 4648 section 4).
-fn base64(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let word = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |acc, (i, &b)| acc | u32::from(b) << (16 - 8 * i));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                let index = (word >> (18 - 6 * i)) & 0x3f;
-                out.push(char::from(ALPHABET[index as usize]));
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
-/// The bytes `text` spells in base64, or `None` where it is not base64.
-fn unbase64(text: &str) -> Option<Vec<u8>> {
-    let digits: Vec<u32> = text
-        .bytes()
-        .filter(|&b| b != b'=')
-        .map(|b| {
-            ALPHABET
-                .iter()
-                .position(|&a| a == b)
-                .and_then(|p| u32::try_from(p).ok())
-        })
-        .collect::<Option<_>>()?;
-    let mut out = Vec::with_capacity(digits.len() * 3 / 4);
-    for chunk in digits.chunks(4) {
-        let word = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |acc, (i, &d)| acc | d << (18 - 6 * i));
-        for i in 1..chunk.len() {
-            out.push(((word >> (24 - 8 * i)) & 0xff) as u8);
-        }
-    }
-    Some(out)
 }
 
 #[cfg(test)]
@@ -232,16 +187,18 @@ mod tests {
     }
 
     #[test]
-    fn base64_matches_the_rfc_vectors_and_comes_back() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(unbase64("Zm9vYmE=").expect("decoded"), b"fooba");
-        assert_eq!(unbase64("Zm9vYmFy").expect("decoded"), b"foobar");
-        assert!(unbase64("not base64!").is_none());
-        let every: Vec<u8> = (0..=255).collect();
-        assert_eq!(unbase64(&base64(&every)).expect("decoded"), every);
+    fn the_mic_travels_in_base_64_and_one_that_is_not_is_no_mic() {
+        let mdn = Mdn::processed("<1@buyer>", "Seller", vec![1, 2, 3], "sha-256");
+        let entity = mdn.entity();
+        let body = String::from_utf8(entity.body.clone()).expect("text");
+        assert!(
+            body.contains("Received-Content-MIC: AQID, sha-256"),
+            "{body}"
+        );
+        let wrong = Entity::new(
+            entity.content_type.clone(),
+            body.replace("AQID", "not base64!").into_bytes(),
+        );
+        assert_eq!(Mdn::from_entity(&wrong).expect("read").mic, None);
     }
 }
