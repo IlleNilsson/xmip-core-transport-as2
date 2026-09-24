@@ -7,9 +7,10 @@
 use std::net::TcpListener;
 
 use http::target::HttpTarget;
+use transport::Transport;
 use transport::error::Result;
+use transport::listening::Listening;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::{Arrived, Transport};
 
 use crate::As2Transport;
 
@@ -37,31 +38,14 @@ impl As2Transport {
     }
 }
 
-/// A bound partner waiting for its one message.
-struct Listening {
-    partner: As2Transport,
-    listener: TcpListener,
-    address: String,
-}
-
-impl FarEnd for Listening {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        self.partner.accept_one(&self.listener)
-    }
-}
-
 impl Loopback for As2Transport {
+    /// A bound partner waiting for its one message.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        let (listener, address) = self.bind()?;
-        Ok(Box::new(Listening {
-            partner: self.unsigned_twin(),
-            listener,
-            address,
-        }))
+        let partner = self.unsigned_twin();
+        Ok(Box::new(Listening::new(
+            move |listener: &TcpListener| partner.accept_one(listener),
+            self.bind()?,
+        )))
     }
 
     /// The other partner posts to this one's path at `address`.

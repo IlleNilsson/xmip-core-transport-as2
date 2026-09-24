@@ -5,17 +5,23 @@
 //! `message/disposition-notification` whose fields say which message this
 //! answers, what became of it and the MIC the receiver computed. The sender
 //! compares that MIC with its own: matching MICs are the proof the partner
-//! got exactly the bytes sent, which is what AS2 exists to give.
+//! got exactly the bytes sent, which is what AS2 exists to give. The report
+//! is written and read as `codec::mime` writes and reads every multipart
+//! body; until 2026-09-24 this file split the body wherever the boundary's
+//! text appeared.
 
 use std::fmt::Write;
 
 use codec::base64;
+use codec::mime::{self, Part};
 use transport::error::{Result, protocol_error};
 
 use crate::signer::Entity;
 
 /// The `Content-Type` of an MDN before any signature is put around it.
 const REPORT: &str = "multipart/report; report-type=disposition-notification";
+/// The media type of the part that carries the notification's fields.
+const NOTIFICATION: &str = "message/disposition-notification";
 
 /// What the receiver reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,7 +66,7 @@ impl Mdn {
     /// This receipt as the entity that goes back in the answer.
     #[must_use]
     pub fn entity(&self) -> Entity {
-        let boundary = "xmip-mdn-boundary";
+        let boundary = mime::boundary();
         let mut fields = format!(
             "Reporting-UA: xmip\r\nOriginal-Recipient: rfc822; {r}\r\n\
              Final-Recipient: rfc822; {r}\r\nOriginal-Message-ID: {id}\r\n\
@@ -76,18 +82,19 @@ impl Mdn {
                 base64::encode(mic)
             );
         }
-        let body = format!(
-            "--{boundary}\r\nContent-Type: text/plain\r\n\r\n\
-             The message was {}.\r\n\
-             --{boundary}\r\nContent-Type: message/disposition-notification\r\n\r\n\
-             {fields}\r\n--{boundary}--\r\n",
-            if self.is_processed() {
-                "processed"
-            } else {
-                "not processed"
-            }
-        );
-        Entity::new(format!("{REPORT}; boundary=\"{boundary}\""), body)
+        let outcome = if self.is_processed() {
+            "processed"
+        } else {
+            "not processed"
+        };
+        let parts = [
+            Part::new(format!("The message was {outcome}.")).header("Content-Type", "text/plain"),
+            Part::new(fields).header("Content-Type", NOTIFICATION),
+        ];
+        Entity::new(
+            format!("{REPORT}; boundary=\"{boundary}\""),
+            mime::write(&boundary, &parts),
+        )
     }
 
     /// The receipt an entity carries.
@@ -97,15 +104,12 @@ impl Mdn {
     /// notification in it, or the notification lacks its message id.
     pub fn from_entity(entity: &Entity) -> Result<Self> {
         let boundary = boundary_of(&entity.content_type)?;
-        let text = String::from_utf8_lossy(&entity.body);
-        let notification = text
-            .split(&format!("--{boundary}"))
-            .find_map(|part| {
-                let (head, body) = part.split_once("\r\n\r\n")?;
-                head.to_ascii_lowercase()
-                    .contains("message/disposition-notification")
-                    .then_some(body)
-            })
+        let parts = mime::read(&entity.body, boundary)
+            .map_err(|refusal| protocol_error(refusal.to_string()))?;
+        let notification = parts
+            .iter()
+            .find(|part| part.content_type().map(mime::media_type).as_deref() == Some(NOTIFICATION))
+            .map(|part| String::from_utf8_lossy(&part.body).into_owned())
             .ok_or_else(|| protocol_error("a report with no disposition notification in it"))?;
         let field = |name: &str| {
             notification.lines().find_map(|line| {
@@ -133,20 +137,13 @@ impl Mdn {
 }
 
 /// The boundary a `multipart/report` names.
-fn boundary_of(content_type: &str) -> Result<String> {
-    if !content_type
-        .to_ascii_lowercase()
-        .starts_with("multipart/report")
-    {
+fn boundary_of(content_type: &str) -> Result<&str> {
+    if mime::media_type(content_type) != "multipart/report" {
         return Err(protocol_error(format!(
             "an answer that is not an MDN: {content_type}"
         )));
     }
-    content_type
-        .split(';')
-        .map(str::trim)
-        .find_map(|parameter| parameter.strip_prefix("boundary="))
-        .map(|value| value.trim_matches('"').to_string())
+    mime::parameter(content_type, "boundary")
         .ok_or_else(|| protocol_error("a multipart report with no boundary"))
 }
 
@@ -159,7 +156,7 @@ mod tests {
         let mdn = Mdn::processed("<1@buyer>", "Seller", vec![1, 2, 3, 250], "sha-256");
         let entity = mdn.entity();
         assert!(entity.content_type.starts_with("multipart/report"));
-        assert!(entity.body.starts_with(b"--xmip-mdn-boundary\r\n"));
+        assert!(entity.body.starts_with(b"--=_xmip_"));
         let read = Mdn::from_entity(&entity).expect("read");
         assert_eq!(read, mdn);
         assert!(read.is_processed());
@@ -174,6 +171,16 @@ mod tests {
             b"--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n--b--\r\n".to_vec(),
         );
         assert!(Mdn::from_entity(&hollow).is_err());
+        let theirs = Entity::new(
+            "Multipart/Report; Report-Type=disposition-notification; Boundary = \"q r\"",
+            b"--q r\r\nContent-Type: text/plain\r\n\r\nok\r\n--q r\r\n\
+              Content-Type: Message/Disposition-Notification\r\n\r\n\
+              Original-Message-ID: <9@partner-x>\r\nDisposition: a; processed\r\n\r\n--q r--\r\n"
+                .to_vec(),
+        );
+        let read = Mdn::from_entity(&theirs).expect("a partner's casing and spacing");
+        assert_eq!(read.original_message_id, "<9@partner-x>");
+        assert!(read.is_processed());
         let failed = Mdn {
             disposition: "automatic-action/MDN-sent-automatically; processed/error: bad".into(),
             ..Mdn::processed("<1@x>", "y", vec![], "sha-256")
