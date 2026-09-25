@@ -6,7 +6,7 @@
 
 use std::net::TcpListener;
 
-use http::target::HttpTarget;
+use net::Endpoint;
 use transport::Transport;
 use transport::error::Result;
 use transport::listening::Listening;
@@ -50,7 +50,8 @@ impl Loopback for As2Transport {
 
     /// The other partner posts to this one's path at `address`.
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
-        let path = HttpTarget::parse(&self.endpoint)?.path;
+        let endpoint = Endpoint::parse(&self.endpoint)?;
+        let path = endpoint.path();
         let near = Self::new(format!("as2://{address}{path}"), &self.partner, &self.me);
         near.timing_out_after(self.timeout.unwrap_or(LOOPBACK_TIMEOUT))
             .send("", payload)
