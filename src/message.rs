@@ -10,7 +10,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use http::message::Request;
+use net::http::Request;
 use sha2::{Digest, Sha256};
 use transport::error::{Result, protocol_error};
 

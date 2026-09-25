@@ -30,10 +30,10 @@ pub mod signer;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use http::message::{Request, Response, exchange, read_request, write_response};
-use http::target::HttpTarget;
 pub use mdn::Mdn;
 pub use message::Message;
+use net::Endpoint;
+use net::http::{Request, Response, exchange, read_request, write_response};
 pub use signer::{Entity, Signer, Unsigned};
 use transport::error::{Result, TransportError, protocol_error};
 use transport::socket;
@@ -83,7 +83,7 @@ impl As2Transport {
     /// # Errors
     /// Where the address is taken, malformed, or not permitted.
     pub fn bind(&self) -> Result<(TcpListener, String)> {
-        socket::bind_tcp(HttpTarget::parse(&self.endpoint)?.authority)
+        socket::bind_tcp(&Endpoint::parse(&self.endpoint)?.address())
     }
 
     /// Accept one message on an already-bound listener and answer its MDN.
@@ -161,7 +161,7 @@ impl As2Transport {
     /// The receipt the partner answered, checked against what was sent.
     fn verify_receipt(&self, response: &Response, sent: &Message, mic: &[u8]) -> Result<()> {
         if !(200..300).contains(&response.status) {
-            let retryable = response.status >= 500 || matches!(response.status, 408 | 429);
+            let retryable = http::status::retryable(response.status);
             return Err(TransportError {
                 message: format!("the partner answered {}", response.status),
                 retryable,
@@ -221,13 +221,13 @@ impl Transport for As2Transport {
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
         let url = self.resolve(target);
-        let parsed = HttpTarget::parse(&url)?;
+        let endpoint = Endpoint::parse(&url)?;
         let plain = Entity::new("application/octet-stream", bytes.to_vec());
         let mic = message::mic(self.signer.micalg(), &plain.body)?;
         let wrapped = self.signer.wrap(plain)?;
         let message = Message::new(&self.me, &self.partner, self.signer.micalg(), wrapped);
-        let request = message.request(parsed.authority, parsed.path);
-        let connection = http::endpoint::connect(&url, self.timeout)?;
+        let request = message.request(&endpoint.authority(), endpoint.path());
+        let connection = http::endpoint::connect(&endpoint, self.timeout)?;
         let response = exchange(connection, &request)?;
         self.verify_receipt(&response, &message, &mic)
     }
