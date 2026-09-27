@@ -37,7 +37,8 @@ use net::http::{Request, Response, exchange, read_request, write_response};
 pub use signer::{Entity, Signer, Unsigned};
 use transport::error::{Result, TransportError, protocol_error};
 use transport::socket;
-use transport::{Arrived, Directions, Transport};
+use transport::{Arrived, Configured, Directions, Transport};
+use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
 
 pub struct As2Transport {
     /// The partner's endpoint to send to, or the address to listen at.
@@ -233,6 +234,53 @@ impl Transport for As2Transport {
     }
 }
 
+impl Configured for As2Transport {
+    /// The address is the partner's endpoint a Send Location posts to, or
+    /// the one a Receive Location listens at: `as2://host:port/as2`. The
+    /// S/MIME certificate is the Location's credentials, not a setting.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "as2_id",
+                kind: Kind::Text,
+                presence: Presence::Required,
+                meaning: "This partner's own AS2 name: AS2-From on a send, the AS2-To a \
+                          received message must carry.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "partner_id",
+                kind: Kind::Text,
+                presence: Presence::Required,
+                meaning: "The AS2 name of the partner sent to, written as AS2-To.",
+                applies: Applies::Send,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Optional,
+                meaning: "How long a partner that stops mid-message is waited on; unbounded \
+                          when left out.",
+                applies: Applies::Both,
+            },
+        ],
+    };
+
+    fn configured(address: &str, settings: &xcore::settings::Read) -> Result<Self> {
+        // Unsigned until the Location's credentials supply the certificate.
+        let transport = Self::new(
+            address,
+            settings.text("as2_id"),
+            settings.optional_text("partner_id").unwrap_or_default(),
+        );
+        Ok(match settings.optional_duration("timeout") {
+            Some(timeout) => transport.timing_out_after(timeout),
+            None => transport,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +296,31 @@ mod tests {
             As2Transport::new("as2://127.0.0.1:0/as2", "Seller", "Buyer").timing_out_after(secs(2));
         let (listener, address) = far_end.bind().expect("binding");
         (far_end, listener, address)
+    }
+
+    #[test]
+    fn as2_declares_its_settings_and_reads_through_them() {
+        use xcore::settings::Given;
+        assert_eq!(As2Transport::SETTINGS.problems(), Vec::<String>::new());
+        let text = |name: &str, value: &str| (name.to_string(), Given::Text(value.to_string()));
+        let given = [
+            text("as2_id", "Buyer"),
+            text("partner_id", "Seller"),
+            text("timeout", "30s"),
+        ];
+        let sent =
+            As2Transport::open("as2://partner:4080/as2", Applies::Send, &given).expect("built");
+        assert_eq!(sent.endpoint, "http://partner:4080/as2");
+        assert_eq!(
+            (sent.me.as_str(), sent.partner.as_str()),
+            ("Buyer", "Seller")
+        );
+        assert_eq!(sent.timeout, Some(secs(30)));
+        let Err(refused) = As2Transport::open("as2://0.0.0.0:4080/as2", Applies::Receive, &given)
+        else {
+            panic!("a Receive Location names no partner");
+        };
+        assert!(refused.message.contains("\"partner_id\""), "{refused}");
     }
 
     #[test]
