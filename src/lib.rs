@@ -30,10 +30,11 @@ pub mod signer;
 use std::net::TcpListener;
 use std::time::Duration;
 
+use http::endpoint::{Connections, Offer};
 pub use mdn::Mdn;
 pub use message::Message;
 use net::Endpoint;
-use net::http::{Request, Response, exchange, read_request, write_response};
+use net::http::{Request, Response, read_request, write_response};
 pub use signer::{Entity, Signer, Unsigned};
 use transport::error::{Result, TransportError, protocol_error};
 use transport::socket;
@@ -47,6 +48,8 @@ pub struct As2Transport {
     partner: String,
     signer: Box<dyn Signer>,
     timeout: Option<Duration>,
+    /// The connections kept to partners' endpoints.
+    connections: Connections,
 }
 
 impl As2Transport {
@@ -61,6 +64,7 @@ impl As2Transport {
             partner: partner.to_string(),
             signer: Box::new(Unsigned),
             timeout: None,
+            connections: Connections::new(),
         }
     }
 
@@ -228,8 +232,10 @@ impl Transport for As2Transport {
         let wrapped = self.signer.wrap(plain)?;
         let message = Message::new(&self.me, &self.partner, self.signer.micalg(), wrapped);
         let request = message.request(&endpoint.authority(), endpoint.path());
-        let connection = http::endpoint::connect(&endpoint, self.timeout)?;
-        let response = exchange(connection, &request)?;
+        let offer = Offer::Http11;
+        let response = self
+            .connections
+            .exchange(&endpoint, self.timeout, offer, &request)?;
         self.verify_receipt(&response, &message, &mic)
     }
 }
