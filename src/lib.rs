@@ -27,14 +27,16 @@ pub mod mdn;
 pub mod message;
 pub mod signer;
 
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::time::Duration;
 
 use http::endpoint::{Connections, Offer};
+use http::inbound::Inbound;
+use http::server;
 pub use mdn::Mdn;
 pub use message::Message;
 use net::Endpoint;
-use net::http::{Request, Response, read_request, write_response};
+use net::http::{Request, Response};
 pub use signer::{Entity, Signer, Unsigned};
 use transport::error::{Result, TransportError, protocol_error};
 use transport::socket;
@@ -50,6 +52,8 @@ pub struct As2Transport {
     timeout: Option<Duration>,
     /// The connections kept to partners' endpoints.
     connections: Connections,
+    /// The listener a Receive Location keeps, and partners' connections.
+    inbound: Inbound,
 }
 
 impl As2Transport {
@@ -65,6 +69,7 @@ impl As2Transport {
             signer: Box::new(Unsigned),
             timeout: None,
             connections: Connections::new(),
+            inbound: Inbound::new(),
         }
     }
 
@@ -98,26 +103,28 @@ impl As2Transport {
     /// was addressed to some other partner — each answered with the status
     /// that says so before the error is returned.
     pub fn accept_one(&self, listener: &TcpListener) -> Result<Arrived> {
-        let (stream, peer) = socket::accept_tcp(listener, self.timeout)?;
-        let (mut reader, mut writer) = socket::split(stream)?;
-        let request = read_request(&mut reader)?
-            .ok_or_else(|| protocol_error("a partner that connected and sent nothing"))?;
-        match self.take(&request) {
+        server::serve_one_from(listener, self.timeout, |request, peer| {
+            self.answer(request, peer)
+        })?
+    }
+
+    /// What one POST from `peer` earns: the message it carries and its MDN,
+    /// or the refusal, with the status that says why.
+    fn answer(&self, request: &Request, peer: SocketAddr) -> (Result<Arrived>, Response) {
+        match self.take(request) {
             Ok((message, entity, answer)) => {
-                write_response(&mut writer, &answer)?;
                 let origin = format!(
                     "as2://{peer}{}?from={}&message-id={}",
                     request.path,
                     message.from,
                     message.message_id.trim_matches(['<', '>'])
                 );
-                Ok(Arrived::new(origin, entity.body))
+                (Ok(Arrived::new(origin, entity.body)), answer)
             }
             Err(error) => {
                 let status = if error.retryable { 503 } else { 400 };
                 let refusal = Response::new(status).body(error.message.as_bytes());
-                write_response(&mut writer, &refusal)?;
-                Err(error)
+                (Err(error), refusal)
             }
         }
     }
@@ -219,9 +226,15 @@ impl Transport for As2Transport {
         Directions::BOTH
     }
 
+    /// The next message from whichever partner posts first, on the listener
+    /// the first receive bound and the connections partners keep.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        let (listener, _) = self.bind()?;
-        Ok(vec![self.accept_one(&listener)?])
+        let arrived = self.inbound.next(
+            || self.bind(),
+            self.timeout,
+            |request, peer| self.answer(request, peer),
+        )??;
+        Ok(vec![arrived])
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
@@ -290,6 +303,7 @@ impl Configured for As2Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use net::http::{read_request, write_response};
     use std::io::{Read, Write};
     use transport::loopback::Loopback;
 
@@ -344,6 +358,29 @@ mod tests {
         assert!(loopback.claims().is_none());
         assert!(loopback.ceiling().is_none());
         assert!(loopback.refuses(b"ISA").is_none());
+    }
+
+    #[test]
+    fn every_receive_takes_from_one_kept_listener_and_one_kept_connection() {
+        let (seller, _, _) = far_end();
+        let address = seller.inbound.bound(|| seller.bind()).expect("bound");
+        let endpoint = format!("as2://{address}/as2");
+        let buyer = std::thread::spawn(move || {
+            let buyer = As2Transport::new(endpoint, "Buyer", "Seller").timing_out_after(secs(2));
+            for round in 0..5u8 {
+                buyer.send("", &[round]).expect("sent");
+            }
+            buyer.connections.opened()
+        });
+        for round in 0..5u8 {
+            assert_eq!(seller.receive().expect("received")[0].bytes, [round]);
+        }
+        assert_eq!(
+            buyer.join().expect("buyer"),
+            1,
+            "one connection for every send"
+        );
+        assert_eq!(seller.inbound.open(), 1);
     }
 
     #[test]
