@@ -7,8 +7,7 @@
 //! it should be signed, and with what. The four are read back off a request
 //! the same way they were written on to it.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use codec::{hex, random};
 
 use net::http::Request;
 use sha2::{Digest, Sha256};
@@ -144,15 +143,9 @@ pub fn mic(micalg: &str, body: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-/// A `Message-ID` that no other message from this process carries:
-/// `<nanos.n@xmip>`.
+/// A `Message-ID` no other message carries: `<128 random bits in hex@xmip>`.
 fn next_message_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("<{nanos}.{n}@xmip>")
+    format!("<{}@xmip>", hex::encode(&random::array::<16>()))
 }
 
 #[cfg(test)]
