@@ -35,8 +35,8 @@ use http::inbound::Inbound;
 use http::server;
 pub use mdn::Mdn;
 pub use message::Message;
-use net::Endpoint;
 use net::http::{Request, Response};
+use net::{Endpoint, Schemes};
 pub use signer::{Entity, Signer, Unsigned};
 use transport::error::{Result, TransportError, protocol_error};
 use transport::socket;
@@ -63,7 +63,7 @@ impl As2Transport {
     #[must_use]
     pub fn new(endpoint: impl Into<String>, me: &str, partner: &str) -> Self {
         Self {
-            endpoint: as_http(&endpoint.into()),
+            endpoint: endpoint.into(),
             me: me.to_string(),
             partner: partner.to_string(),
             signer: Box::new(Unsigned),
@@ -93,7 +93,7 @@ impl As2Transport {
     /// # Errors
     /// Where the address is taken, malformed, or not permitted.
     pub fn bind(&self) -> Result<(TcpListener, String)> {
-        socket::bind_tcp(&Endpoint::parse(&self.endpoint)?.address())
+        socket::bind_tcp(&Endpoint::parse_under(&self.endpoint, &SCHEMES)?.address())
     }
 
     /// Accept one message on an already-bound listener and answer its MDN.
@@ -162,11 +162,11 @@ impl As2Transport {
 
     /// Where a target names the partner's endpoint itself, or is empty and
     /// means the one configured.
-    fn resolve(&self, target: &str) -> String {
+    fn resolve<'a>(&'a self, target: &'a str) -> &'a str {
         if target.is_empty() {
-            self.endpoint.clone()
+            &self.endpoint
         } else {
-            as_http(target)
+            target
         }
     }
 
@@ -206,16 +206,12 @@ impl As2Transport {
     }
 }
 
-/// `as2://` is `http://` on the wire, and `as2s://` is `https://`.
-fn as_http(url: &str) -> String {
-    if let Some(rest) = url.strip_prefix("as2://") {
-        format!("http://{rest}")
-    } else if let Some(rest) = url.strip_prefix("as2s://") {
-        format!("https://{rest}")
-    } else {
-        url.to_string()
-    }
-}
+/// The schemes a partner's endpoint is written in: `as2://` is `http://`
+/// on the wire, and `as2s://` is `https://`.
+const SCHEMES: Schemes = Schemes {
+    plain: &["http", "as2"],
+    secure: &["https", "as2s"],
+};
 
 impl Transport for As2Transport {
     fn name(&self) -> &'static str {
@@ -238,8 +234,7 @@ impl Transport for As2Transport {
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        let url = self.resolve(target);
-        let endpoint = Endpoint::parse(&url)?;
+        let endpoint = Endpoint::parse_under(self.resolve(target), &SCHEMES)?;
         let plain = Entity::new("application/octet-stream", bytes.to_vec());
         let mic = message::mic(self.signer.micalg(), &plain.body)?;
         let wrapped = self.signer.wrap(plain)?;
@@ -330,7 +325,11 @@ mod tests {
         ];
         let sent =
             As2Transport::open("as2://partner:4080/as2", Applies::Send, &given).expect("built");
-        assert_eq!(sent.endpoint, "http://partner:4080/as2");
+        let endpoint = Endpoint::parse_under(&sent.endpoint, &SCHEMES).expect("read");
+        assert_eq!(
+            (endpoint.secure(), endpoint.address()),
+            (false, "partner:4080".into())
+        );
         assert_eq!(
             (sent.me.as_str(), sent.partner.as_str()),
             ("Buyer", "Seller")
