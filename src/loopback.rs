@@ -15,7 +15,7 @@ use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use crate::As2Transport;
 
 /// The partner the loopback listens as.
-pub const ME: &str = "Seller";
+const ME: &str = "Seller";
 /// The partner that posts to it.
 pub const PARTNER: &str = "Buyer";
 
@@ -50,7 +50,7 @@ impl Loopback for As2Transport {
 
     /// The other partner posts to this one's path at `address`.
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
-        let endpoint = Endpoint::parse(&self.endpoint)?;
+        let endpoint = Endpoint::parse_under(&self.endpoint, &crate::SCHEMES)?;
         let path = endpoint.path();
         let near = Self::new(format!("as2://{address}{path}"), &self.partner, &self.me);
         near.timing_out_after(self.timeout.unwrap_or(LOOPBACK_TIMEOUT))

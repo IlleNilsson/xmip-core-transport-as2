@@ -103,7 +103,7 @@ impl Mdn {
     /// Where the entity is not a `multipart/report` with a disposition
     /// notification in it, or the notification lacks its message id.
     pub fn from_entity(entity: &Entity) -> Result<Self> {
-        let boundary = boundary_of(&entity.content_type)?;
+        let boundary = mime::boundary_of(&entity.content_type, "multipart/report")?;
         let parts = mime::read(&entity.body, boundary)
             .map_err(|refusal| protocol_error(refusal.to_string()))?;
         let notification = parts
@@ -134,17 +134,6 @@ impl Mdn {
             mic,
         })
     }
-}
-
-/// The boundary a `multipart/report` names.
-fn boundary_of(content_type: &str) -> Result<&str> {
-    if mime::media_type(content_type) != "multipart/report" {
-        return Err(protocol_error(format!(
-            "an answer that is not an MDN: {content_type}"
-        )));
-    }
-    mime::parameter(content_type, "boundary")
-        .ok_or_else(|| protocol_error("a multipart report with no boundary"))
 }
 
 #[cfg(test)]
