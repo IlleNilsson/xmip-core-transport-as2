@@ -2,12 +2,12 @@
 //!
 //! RFC 4130 wraps the payload in S/MIME: `multipart/signed` with a
 //! `pkcs7-signature` part, or `application/pkcs7-mime` enveloped for the
-//! partner's certificate. Both need a certificate and a private key, and
+//! Party's certificate. Both need a certificate and a private key, and
 //! those are the business of `xmip-core-authenticate-certificate`, which the
 //! manifest names as this technology's dependency: it supplies a [`Signer`]
 //! and this crate applies it to every message and every MDN. Until it does,
 //! [`Unsigned`] carries the entity as it is, which is the exchange two Xmip
-//! nodes on one wire agree on and what a partner test bench accepts.
+//! nodes on one wire agree on and what a Party's test bench accepts.
 
 use transport::error::Result;
 
@@ -30,7 +30,7 @@ impl Entity {
 
 /// What wraps an entity on the way out and unwraps it on the way in.
 ///
-/// A signer is applied to the message and, where the partner asked for a
+/// A signer is applied to the message and, where the Party asked for a
 /// signed receipt, to the MDN as well — RFC 4130 sections 5 and 7.
 pub trait Signer: Send + Sync {
     /// The digest the MDN's `Received-Content-MIC` names, as the

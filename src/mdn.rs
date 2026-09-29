@@ -4,7 +4,7 @@
 //! A `multipart/report` of two parts — a human-readable line and a
 //! `message/disposition-notification` whose fields say which message this
 //! answers, what became of it and the MIC the receiver computed. The sender
-//! compares that MIC with its own: matching MICs are the proof the partner
+//! compares that MIC with its own: matching MICs are the proof the Party
 //! got exactly the bytes sent, which is what AS2 exists to give. The report
 //! is written and read as `codec::mime` writes and reads every multipart
 //! body; until 2026-09-24 this file split the body wherever the boundary's
@@ -28,7 +28,7 @@ const NOTIFICATION: &str = "message/disposition-notification";
 pub struct Mdn {
     /// The `Message-ID` this answers.
     pub original_message_id: String,
-    /// The partner reporting, as `AS2-To` named it.
+    /// The Party reporting, as `AS2-To` named it.
     pub recipient: String,
     /// `processed`, or `processed/error: …` and its kin.
     pub disposition: String,
@@ -164,11 +164,11 @@ mod tests {
             "Multipart/Report; Report-Type=disposition-notification; Boundary = \"q r\"",
             b"--q r\r\nContent-Type: text/plain\r\n\r\nok\r\n--q r\r\n\
               Content-Type: Message/Disposition-Notification\r\n\r\n\
-              Original-Message-ID: <9@partner-x>\r\nDisposition: a; processed\r\n\r\n--q r--\r\n"
+              Original-Message-ID: <9@party-x>\r\nDisposition: a; processed\r\n\r\n--q r--\r\n"
                 .to_vec(),
         );
-        let read = Mdn::from_entity(&theirs).expect("a partner's casing and spacing");
-        assert_eq!(read.original_message_id, "<9@partner-x>");
+        let read = Mdn::from_entity(&theirs).expect("a Party's casing and spacing");
+        assert_eq!(read.original_message_id, "<9@party-x>");
         assert!(read.is_processed());
         let failed = Mdn {
             disposition: "automatic-action/MDN-sent-automatically; processed/error: bad".into(),
