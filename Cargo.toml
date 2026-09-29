@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/IlleNilsson/xmip-core-transport-as2"
-description = "AS2 transport: EDI over HTTP, RFC 4130 — one message is one Stream, its partner ids beside it, answered with a signed MDN; a Receive Location answers partners, a Send Location posts to one. A xmip-core-transport technology."
+description = "AS2 transport: EDI over HTTP, RFC 4130 — one message is one Stream, its Party ids beside it, answered with a signed MDN; a Receive Location answers Parties, a Send Location posts to one. A xmip-core-transport technology."
 publish = false
 
 [lib]
@@ -16,7 +16,7 @@ path = "src/lib.rs"
 [dependencies]
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md). The http technology is the carrier the manifest
-# declares: AS2 is an HTTP POST with partner headers, answered with an MDN,
+# declares: AS2 is an HTTP POST with Party headers, answered with an MDN,
 # and the request, the answer and the endpoint are read there. sha2 is the
 # MIC the MDN carries back (RFC 4130 section 7.3.1). Standard library
 # otherwise. The S/MIME signer the manifest names,

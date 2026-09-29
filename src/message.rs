@@ -1,7 +1,7 @@
-//! One AS2 message: the partner headers RFC 4130 section 6 puts on an HTTP
+//! One AS2 message: the Party headers RFC 4130 section 6 puts on an HTTP
 //! POST, the entity that is its body, and the MIC the receipt hashes it to.
 //!
-//! `AS2-From` and `AS2-To` are the partners as the agreement names them,
+//! `AS2-From` and `AS2-To` are the Parties as the agreement names them,
 //! `Message-ID` is what the MDN answers, and `Disposition-Notification-To`
 //! is the ask for that MDN — with `Disposition-Notification-Options` saying
 //! it should be signed, and with what. The four are read back off a request
@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn a_post_without_the_partner_headers_is_refused() {
+    fn a_post_without_the_party_headers_is_refused() {
         let request = Request::new("POST", "/as2").body(b"ISA");
         assert!(Message::from_request(&request).is_err());
         let get = Request::new("GET", "/as2")

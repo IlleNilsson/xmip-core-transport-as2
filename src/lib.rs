@@ -1,21 +1,21 @@
 #![forbid(unsafe_code)]
 
 //! Streams that arrive as AS2 messages. One message is one Stream, the
-//! partner ids and the message id kept beside it.
+//! Party ids and the message id kept beside it.
 //!
 //! AS2 is EDI over HTTP, RFC 4130: a POST carrying the payload as its body
-//! and the partners in `AS2-From` and `AS2-To`, answered with a Message
+//! and the Parties in `AS2-From` and `AS2-To`, answered with a Message
 //! Disposition Notification that carries the MIC of what arrived — the
-//! receipt a partner keeps as proof of delivery. A Receive Location listens
-//! for partners and answers each message with its MDN; a Send Location posts
-//! to a partner and reads the MDN back on the same connection, refusing the
+//! receipt a Party keeps as proof of delivery. A Receive Location listens
+//! for Parties and answers each message with its MDN; a Send Location posts
+//! to a Party and reads the MDN back on the same connection, refusing the
 //! send where the receipt is missing, says anything but processed, or names
 //! a MIC other than the one computed here.
 //!
 //! S/MIME signing and encryption need a certificate. The envelope and the
 //! MDN are here; the signer is a [`Signer`] that
 //! `xmip-core-authenticate-certificate` supplies, and without one the
-//! exchange is [`Unsigned`] — two Xmip nodes on one wire, or a partner test
+//! exchange is [`Unsigned`] — two Xmip nodes on one wire, or a Party's test
 //! bench. The http technology carries the request, the answer and the
 //! endpoint; TLS is its `tls` feature (ADR-0033).
 //!
@@ -44,28 +44,28 @@ use transport::{Arrived, Configured, Directions, Transport};
 use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
 
 pub struct As2Transport {
-    /// The partner's endpoint to send to, or the address to listen at.
+    /// The Party's endpoint to send to, or the address to listen at.
     endpoint: String,
     me: String,
-    partner: String,
+    party: String,
     signer: Box<dyn Signer>,
     timeout: Option<Duration>,
-    /// The connections kept to partners' endpoints.
+    /// The connections kept to Parties' endpoints.
     connections: Connections,
-    /// The listener a Receive Location keeps, and partners' connections.
+    /// The listener a Receive Location keeps, and Parties' connections.
     inbound: Inbound,
 }
 
 impl As2Transport {
-    /// Speak as partner `me` to `partner` at `endpoint` —
+    /// Speak as Party `me` to Party `party` at `endpoint` —
     /// `http://host:port/as2` or `as2://host:port/as2` — unsigned until
     /// [`Self::signing_with`].
     #[must_use]
-    pub fn new(endpoint: impl Into<String>, me: &str, partner: &str) -> Self {
+    pub fn new(endpoint: impl Into<String>, me: &str, party: &str) -> Self {
         Self {
             endpoint: endpoint.into(),
             me: me.to_string(),
-            partner: partner.to_string(),
+            party: party.to_string(),
             signer: Box::new(Unsigned),
             timeout: None,
             connections: Connections::new(),
@@ -80,14 +80,14 @@ impl As2Transport {
         self
     }
 
-    /// Give up on a partner that stops mid-message.
+    /// Give up on a Party that stops mid-message.
     #[must_use]
     pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
-    /// Bind at the endpoint's authority as the far end partners post to,
+    /// Bind at the endpoint's authority as the far end Parties post to,
     /// and report the address actually assigned.
     ///
     /// # Errors
@@ -100,7 +100,7 @@ impl As2Transport {
     ///
     /// # Errors
     /// Where the connection broke, the POST is not an AS2 message, or it
-    /// was addressed to some other partner — each answered with the status
+    /// was addressed to some other Party — each answered with the status
     /// that says so before the error is returned.
     pub fn accept_one(&self, listener: &TcpListener) -> Result<Arrived> {
         server::serve_one_from(listener, self.timeout, |request, peer| {
@@ -135,7 +135,7 @@ impl As2Transport {
         let message = Message::from_request(request)?;
         if message.to != self.me {
             return Err(protocol_error(format!(
-                "a message for {}, and this partner is {}",
+                "a message for {}, and this Party is {}",
                 message.to, self.me
             )));
         }
@@ -160,7 +160,7 @@ impl As2Transport {
         Ok((message, entity, answer))
     }
 
-    /// Where a target names the partner's endpoint itself, or is empty and
+    /// Where a target names the Party's endpoint itself, or is empty and
     /// means the one configured.
     fn resolve<'a>(&'a self, target: &'a str) -> &'a str {
         if target.is_empty() {
@@ -170,12 +170,12 @@ impl As2Transport {
         }
     }
 
-    /// The receipt the partner answered, checked against what was sent.
+    /// The receipt the Party answered, checked against what was sent.
     fn verify_receipt(&self, response: &Response, sent: &Message, mic: &[u8]) -> Result<()> {
         if !(200..300).contains(&response.status) {
             let retryable = http::status::retryable(response.status);
             return Err(TransportError {
-                message: format!("the partner answered {}", response.status),
+                message: format!("the Party answered {}", response.status),
                 retryable,
             });
         }
@@ -192,21 +192,21 @@ impl As2Transport {
         }
         if !receipt.is_processed() {
             return Err(protocol_error(format!(
-                "the partner did not process the message: {}",
+                "the Party did not process the message: {}",
                 receipt.disposition
             )));
         }
         match &receipt.mic {
             Some((theirs, _)) if theirs == mic => Ok(()),
             Some(_) => Err(protocol_error(
-                "the partner's MIC is not the MIC of what was sent",
+                "the Party's MIC is not the MIC of what was sent",
             )),
             None => Err(protocol_error("a receipt with no MIC in it")),
         }
     }
 }
 
-/// The schemes a partner's endpoint is written in: `as2://` is `http://`
+/// The schemes a Party's endpoint is written in: `as2://` is `http://`
 /// on the wire, and `as2s://` is `https://`.
 const SCHEMES: Schemes = Schemes {
     plain: &["http", "as2"],
@@ -222,8 +222,8 @@ impl Transport for As2Transport {
         Directions::BOTH
     }
 
-    /// The next message from whichever partner posts first, on the listener
-    /// the first receive bound and the connections partners keep.
+    /// The next message from whichever Party posts first, on the listener
+    /// the first receive bound and the connections Parties keep.
     fn receive(&self) -> Result<Vec<Arrived>> {
         let arrived = self.inbound.next(
             || self.bind(),
@@ -238,7 +238,7 @@ impl Transport for As2Transport {
         let plain = Entity::new("application/octet-stream", bytes.to_vec());
         let mic = message::mic(self.signer.micalg(), &plain.body)?;
         let wrapped = self.signer.wrap(plain)?;
-        let message = Message::new(&self.me, &self.partner, self.signer.micalg(), wrapped);
+        let message = Message::new(&self.me, &self.party, self.signer.micalg(), wrapped);
         let request = message.request(&endpoint.authority(), endpoint.path());
         let offer = Offer::Http11;
         let response = self
@@ -249,7 +249,7 @@ impl Transport for As2Transport {
 }
 
 impl Configured for As2Transport {
-    /// The address is the partner's endpoint a Send Location posts to, or
+    /// The address is the Party's endpoint a Send Location posts to, or
     /// the one a Receive Location listens at: `as2://host:port/as2`. The
     /// S/MIME certificate is the Location's credentials, not a setting.
     const SETTINGS: &'static Settings = &Settings {
@@ -259,22 +259,22 @@ impl Configured for As2Transport {
                 name: "as2_id",
                 kind: Kind::Text,
                 presence: Presence::Required,
-                meaning: "This partner's own AS2 name: AS2-From on a send, the AS2-To a \
+                meaning: "This Party's own AS2 name: AS2-From on a send, the AS2-To a \
                           received message must carry.",
                 applies: Applies::Both,
             },
             Setting {
-                name: "partner_id",
+                name: "to_party_id",
                 kind: Kind::Text,
                 presence: Presence::Required,
-                meaning: "The AS2 name of the partner sent to, written as AS2-To.",
+                meaning: "The AS2 name of the Party sent to, written as AS2-To.",
                 applies: Applies::Send,
             },
             Setting {
                 name: "timeout",
                 kind: Kind::Duration,
                 presence: Presence::Optional,
-                meaning: "How long a partner that stops mid-message is waited on; unbounded \
+                meaning: "How long a Party that stops mid-message is waited on; unbounded \
                           when left out.",
                 applies: Applies::Both,
             },
@@ -286,7 +286,7 @@ impl Configured for As2Transport {
         let transport = Self::new(
             address,
             settings.text("as2_id"),
-            settings.optional_text("partner_id").unwrap_or_default(),
+            settings.optional_text("to_party_id").unwrap_or_default(),
         );
         Ok(match settings.optional_duration("timeout") {
             Some(timeout) => transport.timing_out_after(timeout),
@@ -320,26 +320,23 @@ mod tests {
         let text = |name: &str, value: &str| (name.to_string(), Given::Text(value.to_string()));
         let given = [
             text("as2_id", "Buyer"),
-            text("partner_id", "Seller"),
+            text("to_party_id", "Seller"),
             text("timeout", "30s"),
         ];
         let sent =
-            As2Transport::open("as2://partner:4080/as2", Applies::Send, &given).expect("built");
+            As2Transport::open("as2://party:4080/as2", Applies::Send, &given).expect("built");
         let endpoint = Endpoint::parse_under(&sent.endpoint, &SCHEMES).expect("read");
         assert_eq!(
             (endpoint.secure(), endpoint.address()),
-            (false, "partner:4080".into())
+            (false, "party:4080".into())
         );
-        assert_eq!(
-            (sent.me.as_str(), sent.partner.as_str()),
-            ("Buyer", "Seller")
-        );
+        assert_eq!((sent.me.as_str(), sent.party.as_str()), ("Buyer", "Seller"));
         assert_eq!(sent.timeout, Some(secs(30)));
         let Err(refused) = As2Transport::open("as2://0.0.0.0:4080/as2", Applies::Receive, &given)
         else {
-            panic!("a Receive Location names no partner");
+            panic!("a Receive Location names no Party");
         };
-        assert!(refused.message.contains("\"partner_id\""), "{refused}");
+        assert!(refused.message.contains("\"to_party_id\""), "{refused}");
     }
 
     #[test]
@@ -383,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn a_target_may_name_the_partners_endpoint_itself() {
+    fn a_target_may_name_the_party_endpoint_itself() {
         let (far_end, listener, address) = far_end();
         let sender = std::thread::spawn(move || {
             As2Transport::new("as2://127.0.0.1:0/as2", "Buyer", "Seller")
@@ -432,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn a_message_for_another_partner_is_refused_and_the_sender_hears_it() {
+    fn a_message_for_another_party_is_refused_and_the_sender_hears_it() {
         let (far_end, listener, address) = far_end();
         let sender = std::thread::spawn(move || {
             As2Transport::new(format!("as2://{address}/as2"), "Buyer", "Somebody")
