@@ -25,13 +25,15 @@
 pub mod loopback;
 pub mod mdn;
 pub mod message;
+mod receipt;
 pub mod signer;
 
 use std::net::{SocketAddr, TcpListener};
+use std::sync::Arc;
 use std::time::Duration;
 
 use http::endpoint::{Connections, Offer};
-use http::inbound::Inbound;
+use http::inbound::{Heard, Inbound};
 use http::server;
 pub use mdn::Mdn;
 pub use message::Message;
@@ -40,15 +42,29 @@ use net::{Endpoint, Schemes};
 pub use signer::{Entity, Signer, Unsigned};
 use transport::error::{Result, TransportError, protocol_error};
 use transport::socket;
-use transport::{Arrived, Configured, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Taken, Transport, Verdict};
 use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
+
+use crate::receipt::Receipt;
+
+/// A message heard: its origin, its entity's body unwrapped, and the
+/// receipt it earns.
+type Held = (String, Vec<u8>, Receipt);
+
+/// What a POST that is not this Party's AS2 message is answered: `503`
+/// where saying it again may succeed, `400` where it will not.
+fn refusal(error: &TransportError) -> Response {
+    let status = if error.retryable { 503 } else { 400 };
+    Response::new(status).body(error.message.as_bytes())
+}
 
 pub struct As2Transport {
     /// The Party's endpoint to send to, or the address to listen at.
     endpoint: String,
     me: String,
     party: String,
-    signer: Box<dyn Signer>,
+    /// Shared with each arrival's acknowledgement, which signs its MDN.
+    signer: Arc<dyn Signer>,
     timeout: Option<Duration>,
     /// The connections kept to Parties' endpoints.
     connections: Connections,
@@ -66,7 +82,7 @@ impl As2Transport {
             endpoint: endpoint.into(),
             me: me.to_string(),
             party: party.to_string(),
-            signer: Box::new(Unsigned),
+            signer: Arc::new(Unsigned),
             timeout: None,
             connections: Connections::new(),
             inbound: Inbound::new(),
@@ -76,7 +92,7 @@ impl As2Transport {
     /// Sign and seal with this, and verify with it.
     #[must_use]
     pub fn signing_with(mut self, signer: impl Signer + 'static) -> Self {
-        self.signer = Box::new(signer);
+        self.signer = Arc::new(signer);
         self
     }
 
@@ -96,42 +112,47 @@ impl As2Transport {
         socket::bind_tcp(&Endpoint::parse_under(&self.endpoint, &SCHEMES)?.address())
     }
 
-    /// Accept one message on an already-bound listener and answer its MDN.
+    /// Accept one message on an already-bound listener and answer its MDN
+    /// at once: what a far end does, which holds what it took whole.
     ///
     /// # Errors
     /// Where the connection broke, the POST is not an AS2 message, or it
     /// was addressed to some other Party — each answered with the status
     /// that says so before the error is returned.
-    pub fn accept_one(&self, listener: &TcpListener) -> Result<Arrived> {
+    pub fn accept_one(&self, listener: &TcpListener) -> Result<Taken> {
         server::serve_one_from(listener, self.timeout, |request, peer| {
-            self.answer(request, peer)
+            let answered = self
+                .take(request, peer)
+                .and_then(|(origin, body, receipt)| {
+                    let answer = receipt.answer(Verdict::Accepted, &*self.signer)?;
+                    Ok((Taken::new(origin, body), answer))
+                });
+            match answered {
+                Ok((taken, answer)) => (Ok(taken), answer),
+                Err(error) => {
+                    let refusal = refusal(&error);
+                    (Err(error), refusal)
+                }
+            }
         })?
     }
 
-    /// What one POST from `peer` earns: the message it carries and its MDN,
-    /// or the refusal, with the status that says why.
-    fn answer(&self, request: &Request, peer: SocketAddr) -> (Result<Arrived>, Response) {
-        match self.take(request) {
-            Ok((message, entity, answer)) => {
-                let origin = format!(
-                    "as2://{peer}{}?from={}&message-id={}",
-                    request.path,
-                    message.from,
-                    message.message_id.trim_matches(['<', '>'])
-                );
-                (Ok(Arrived::new(origin, entity.body)), answer)
-            }
+    /// What one POST from `peer` is heard as: a message that waits for its
+    /// receipt, or a refusal answered at once with the status that says
+    /// why.
+    fn hear(&self, request: &Request, peer: SocketAddr) -> Heard<Result<Held>> {
+        match self.take(request, peer) {
+            Ok(heard) => Heard::Waiting(Ok(heard)),
             Err(error) => {
-                let status = if error.retryable { 503 } else { 400 };
-                let refusal = Response::new(status).body(error.message.as_bytes());
-                (Err(error), refusal)
+                let refusal = refusal(&error);
+                Heard::Answered(Err(error), refusal)
             }
         }
     }
 
-    /// The message a request carries, its entity unwrapped, and the answer
-    /// it earns.
-    fn take(&self, request: &Request) -> Result<(Message, Entity, Response)> {
+    /// The message a request from `peer` carries: its origin, its entity
+    /// unwrapped, and the receipt it earns once accepted.
+    fn take(&self, request: &Request, peer: SocketAddr) -> Result<Held> {
         let message = Message::from_request(request)?;
         if message.to != self.me {
             return Err(protocol_error(format!(
@@ -140,24 +161,14 @@ impl As2Transport {
             )));
         }
         let entity = self.signer.unwrap(message.entity.clone())?;
-        let answer = if message.wants_receipt() {
-            let micalg = message
-                .micalg
-                .clone()
-                .unwrap_or_else(|| "sha-256".to_string());
-            let mic = message::mic(&micalg, &entity.body)?;
-            let receipt = Mdn::processed(&message.message_id, &self.me, mic, &micalg);
-            let wrapped = self.signer.wrap(receipt.entity())?;
-            Response::new(200)
-                .header("AS2-Version", message::VERSION)
-                .header("AS2-From", &self.me)
-                .header("AS2-To", &message.from)
-                .header("Content-Type", &wrapped.content_type)
-                .body(&wrapped.body)
-        } else {
-            Response::new(200)
-        };
-        Ok((message, entity, answer))
+        let receipt = Receipt::for_message(&message, &entity, &self.me)?;
+        let origin = format!(
+            "as2://{peer}{}?from={}&message-id={}",
+            request.path,
+            message.from,
+            message.message_id.trim_matches(['<', '>'])
+        );
+        Ok((origin, entity.body, receipt))
     }
 
     /// Where a target names the Party's endpoint itself, or is empty and
@@ -222,15 +233,38 @@ impl Transport for As2Transport {
         Directions::BOTH
     }
 
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Unordered(
+            "each request is its own, and a connection waiting for its answer takes no next request",
+        )
+    }
+
     /// The next message from whichever Party posts first, on the listener
     /// the first receive bound and the connections Parties keep.
+    ///
+    /// The Party waits for its answer until the receive cycle has ended
+    /// (`receipt::Receipt::answer`): on [`Verdict::Accepted`] the MDN
+    /// (signed where a signer is set); on [`Verdict::Refused`] an error MDN,
+    /// `processed/error:` and why, the final answer the Party does not send
+    /// again after; on [`Verdict::Failed`] `503`, so the Party keeps the
+    /// message and sends it again. A POST that is not this Party's message
+    /// is answered at once and returned as the error.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        let arrived = self.inbound.next(
+        let (heard, reply) = self.inbound.next(
             || self.bind(),
             self.timeout,
-            |request, peer| self.answer(request, peer),
-        )??;
-        Ok(vec![arrived])
+            |request, peer| self.hear(&request, peer),
+        )?;
+        let (origin, body, receipt) = heard?;
+        let reply = reply.ok_or_else(|| protocol_error("a message answered unheard"))?;
+        let signer = Arc::clone(&self.signer);
+        let acknowledgement = Acknowledgement::deferred(move |verdict| {
+            // A receipt that cannot be signed lets the Party go unanswered
+            // — the dropped reply shuts its connection — and it resends.
+            let answer = receipt.answer(verdict, &*signer)?;
+            reply.answer(&answer)
+        });
+        Ok(vec![Arrived::whole(origin, body, acknowledgement)])
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
@@ -369,7 +403,7 @@ mod tests {
             buyer.connections.opened()
         });
         for round in 0..5u8 {
-            assert_eq!(seller.receive().expect("received")[0].bytes, [round]);
+            assert_eq!(taken(&seller).bytes, [round]);
         }
         assert_eq!(
             buyer.join().expect("buyer"),
@@ -377,6 +411,44 @@ mod tests {
             "one connection for every send"
         );
         assert_eq!(seller.inbound.open(), 1);
+    }
+
+    /// The one message the next receive takes, accepted.
+    fn taken(seller: &As2Transport) -> Taken {
+        let mut arrived = seller.receive().expect("received");
+        assert_eq!(arrived.len(), 1);
+        arrived.remove(0).taken().expect("taken")
+    }
+
+    #[test]
+    fn the_party_hears_its_mdn_on_acceptance_503_on_failure_and_an_error_mdn_on_refusal() {
+        let (seller, _, _) = far_end();
+        let address = seller.inbound.bound(|| seller.bind()).expect("bound");
+        let endpoint = format!("as2://{address}/as2");
+        let buyer = std::thread::spawn(move || {
+            let buyer = As2Transport::new(endpoint, "Buyer", "Seller").timing_out_after(secs(2));
+            let failed = buyer.send("", b"ISA").expect_err("failed");
+            buyer.send("", b"ISA").expect("resent, receipted");
+            let refused = buyer.send("", b"IEA").expect_err("refused");
+            (failed, refused)
+        });
+        let mut arrived = seller.receive().expect("received");
+        let first = arrived.remove(0);
+        assert!(first.defers());
+        assert!(!buyer.is_finished(), "no answer before the verdict");
+        first.failed().expect("failed");
+        assert_eq!(taken(&seller).bytes, b"ISA", "sent again and taken");
+        seller
+            .receive()
+            .expect("the next message")
+            .remove(0)
+            .refused(transport::Refusal::Unacceptable)
+            .expect("refused");
+        let (failed, refused) = buyer.join().expect("buyer");
+        assert!(failed.retryable, "{failed}");
+        assert!(failed.message.contains("503"), "{failed}");
+        assert!(!refused.retryable, "not sent again: {refused}");
+        assert!(refused.message.contains("processed/error"), "{refused}");
     }
 
     #[test]
