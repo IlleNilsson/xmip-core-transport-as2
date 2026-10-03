@@ -54,6 +54,22 @@ impl Mdn {
         }
     }
 
+    /// This receipt turned into its error disposition: `processed/error:`
+    /// and the `modifier` that says why (RFC 3798 section 3.2.6.3, the
+    /// AS2 modifiers of RFC 4130 section 7.4.3), with no MIC — nothing was
+    /// processed to compute it over. A sending Party files it as the final
+    /// answer and does not send the message again.
+    #[must_use]
+    pub fn refused(&self, modifier: &str) -> Self {
+        Self {
+            disposition: format!(
+                "automatic-action/MDN-sent-automatically; processed/error: {modifier}"
+            ),
+            mic: None,
+            ..self.clone()
+        }
+    }
+
     /// Whether the receiver says the message was processed without error.
     #[must_use]
     pub fn is_processed(&self) -> bool {
@@ -170,10 +186,12 @@ mod tests {
         let read = Mdn::from_entity(&theirs).expect("a Party's casing and spacing");
         assert_eq!(read.original_message_id, "<9@party-x>");
         assert!(read.is_processed());
-        let failed = Mdn {
-            disposition: "automatic-action/MDN-sent-automatically; processed/error: bad".into(),
-            ..Mdn::processed("<1@x>", "y", vec![], "sha-256")
-        };
+        let failed = Mdn::processed("<1@x>", "y", vec![1], "sha-256").refused("bad");
+        assert_eq!(
+            failed.disposition,
+            "automatic-action/MDN-sent-automatically; processed/error: bad"
+        );
+        assert_eq!(failed.mic, None);
         assert!(!failed.is_processed());
         assert!(
             !Mdn::from_entity(&failed.entity())
