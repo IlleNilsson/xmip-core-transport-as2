@@ -46,6 +46,20 @@ impl Message {
         }
     }
 
+    /// This message, its `Message-ID` formed from `key` where there is one
+    /// ([`message_id_of`]): the same on every attempt of one delivery, which
+    /// a receiving Party recognises a message sent again by.
+    #[must_use]
+    pub fn keyed(self, key: Option<&str>) -> Self {
+        match key {
+            Some(key) => Self {
+                message_id: message_id_of(key),
+                ..self
+            },
+            None => self,
+        }
+    }
+
     /// The POST that carries this message to `path`, `Host` set to
     /// `authority`.
     #[must_use]
@@ -141,6 +155,14 @@ pub fn mic(micalg: &str, body: &[u8]) -> Result<Vec<u8>> {
             "a receipt digest this transport does not compute: {other}"
         ))),
     }
+}
+
+/// The `Message-ID` a keyed message carries: `<key@xmip>`, the form RFC 5322
+/// gives a message identifier, the right-hand side the one every message
+/// this crate sends carries.
+#[must_use]
+pub fn message_id_of(key: &str) -> String {
+    format!("<{key}@xmip>")
 }
 
 /// A `Message-ID` no other message carries: `<128 random bits in hex@xmip>`.

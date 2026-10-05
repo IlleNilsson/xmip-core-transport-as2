@@ -18,6 +18,10 @@ A Party waits on its connection for its MDN until the runtime's whole receive cy
 
 A POST that is not this Party's AS2 message is answered `400` (or `503`) at once. No round trip is added: the MDN goes back on the same exchange, only later.
 
+## The deduplication key
+
+A keyed send (`Transport::send_keyed`, built 2026-10-04) carries the Journey's identifier in the `Message-ID` header, `<key@xmip>` (`message::message_id_of`): RFC 5322's form, the right-hand side every message this crate sends carries, the same on every attempt of one Journey. A receiving Party detects a message sent again by its `Message-ID` (RFC 4130), and the MDN answers it. An unkeyed `send` carries one of its own, 128 random bits.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it

@@ -268,11 +268,25 @@ impl Transport for As2Transport {
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+        self.post(target, bytes, None)
+    }
+
+    /// The key is the message's `Message-ID`, `<key@xmip>`
+    /// ([`message::message_id_of`]): what a receiving Party detects a
+    /// message sent again by, and what its MDN answers.
+    fn send_keyed(&self, target: &str, bytes: &[u8], key: &str) -> Result<()> {
+        self.post(target, bytes, Some(key))
+    }
+}
+
+impl As2Transport {
+    /// The one send: one message posted to the Party and its MDN verified.
+    fn post(&self, target: &str, bytes: &[u8], key: Option<&str>) -> Result<()> {
         let endpoint = Endpoint::parse_under(self.resolve(target), &SCHEMES)?;
         let plain = Entity::new("application/octet-stream", bytes.to_vec());
         let mic = message::mic(self.signer.micalg(), &plain.body)?;
         let wrapped = self.signer.wrap(plain)?;
-        let message = Message::new(&self.me, &self.party, self.signer.micalg(), wrapped);
+        let message = Message::new(&self.me, &self.party, self.signer.micalg(), wrapped).keyed(key);
         let request = message.request(&endpoint.authority(), endpoint.path());
         let offer = Offer::Http11;
         let response = self
