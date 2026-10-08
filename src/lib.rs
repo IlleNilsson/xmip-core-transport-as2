@@ -47,9 +47,9 @@ use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
 
 use crate::receipt::Receipt;
 
-/// A message heard: its origin, its entity's body unwrapped, and the
-/// receipt it earns.
-type Held = (String, Vec<u8>, Receipt);
+/// A message heard: its origin, its entity's body unwrapped, the receipt
+/// it earns, and what the request said of its sender.
+type Held = (String, Vec<u8>, Receipt, server::Sender);
 
 /// What a POST that is not this Party's AS2 message is answered: `503`
 /// where saying it again may succeed, `400` where it will not.
@@ -123,9 +123,9 @@ impl As2Transport {
         server::serve_one_from(listener, self.timeout, |request, peer| {
             let answered = self
                 .take(request, peer)
-                .and_then(|(origin, body, receipt)| {
+                .and_then(|(origin, body, receipt, sender)| {
                     let answer = receipt.answer(Verdict::Accepted, &*self.signer)?;
-                    Ok((Taken::new(origin, body), answer))
+                    Ok((sender.taken(Taken::new(origin, body)), answer))
                 });
             match answered {
                 Ok((taken, answer)) => (Ok(taken), answer),
@@ -168,7 +168,12 @@ impl As2Transport {
             message.from,
             message.message_id.trim_matches(['<', '>'])
         );
-        Ok((origin, entity.body, receipt))
+        Ok((
+            origin,
+            entity.body,
+            receipt,
+            server::Sender::of(request, peer),
+        ))
     }
 
     /// Where a target names the Party's endpoint itself, or is empty and
@@ -255,7 +260,7 @@ impl Transport for As2Transport {
             self.timeout,
             |request, peer| self.hear(&request, peer),
         )?;
-        let (origin, body, receipt) = heard?;
+        let (origin, body, receipt, sender) = heard?;
         let reply = reply.ok_or_else(|| protocol_error("a message answered unheard"))?;
         let signer = Arc::clone(&self.signer);
         let acknowledgement = Acknowledgement::deferred(move |verdict| {
@@ -264,7 +269,11 @@ impl Transport for As2Transport {
             let answer = receipt.answer(verdict, &*signer)?;
             reply.answer(&answer)
         });
-        Ok(vec![Arrived::whole(origin, body, acknowledgement)])
+        Ok(vec![sender.on(Arrived::whole(
+            origin,
+            body,
+            acknowledgement,
+        ))])
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {

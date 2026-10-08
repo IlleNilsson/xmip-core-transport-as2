@@ -7,6 +7,7 @@
 use std::net::TcpListener;
 
 use net::Endpoint;
+use transport::ArrivalIdentity;
 use transport::Transport;
 use transport::error::Result;
 use transport::listening::Listening;
@@ -39,6 +40,10 @@ impl As2Transport {
 }
 
 impl Loopback for As2Transport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        http::server::REQUEST
+    }
+
     /// A bound Party waiting for its one message.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         let party = self.unsigned_twin();
