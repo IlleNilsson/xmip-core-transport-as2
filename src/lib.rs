@@ -244,6 +244,10 @@ impl Transport for As2Transport {
         )
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Waits("the listener waits for a Party's post")
+    }
+
     /// The next message from whichever Party posts first, on the listener
     /// the first receive bound and the connections Parties keep.
     ///
