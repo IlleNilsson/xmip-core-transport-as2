@@ -409,7 +409,7 @@ mod tests {
         assert!(first.origin_uri.contains("/as2?from=Buyer&message-id="));
         let long = vec![0x2a; 200_000];
         assert_eq!(loopback.round(&long).expect("second").bytes, long);
-        assert!(loopback.round(b"").expect("third").bytes.is_empty());
+        assert_eq!(loopback.round(b"").expect("third").bytes, [] as [u8; 0]);
         assert_eq!(loopback.name(), "as2");
         assert_eq!(loopback.directions(), Directions::BOTH);
         assert!(loopback.claims().is_none());
