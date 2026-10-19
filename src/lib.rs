@@ -258,7 +258,7 @@ impl Transport for As2Transport {
     /// again after; on [`Verdict::Failed`] `503`, so the Party keeps the
     /// message and sends it again. A POST that is not this Party's message
     /// is answered at once and returned as the error.
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let (heard, reply) = self.inbound.next(
             || self.bind(),
             self.timeout,
@@ -280,15 +280,18 @@ impl Transport for As2Transport {
         ))])
     }
 
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
-        self.post(target, bytes, None)
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered(
+            "the message is signed and encrypted whole, its MIC taken over all of it",
+        )
     }
 
     /// The key is the message's `Message-ID`, `<key@xmip>`
     /// ([`message::message_id_of`]): what a receiving Party detects a
     /// message sent again by, and what its MDN answers.
-    fn send_keyed(&self, target: &str, bytes: &[u8], key: &str) -> Result<()> {
-        self.post(target, bytes, Some(key))
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
+        self.post(target, bytes, outgoing.key())
     }
 }
 

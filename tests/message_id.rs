@@ -21,9 +21,10 @@ fn a_keyed_message_carries_the_journey_id_as_its_message_id_on_every_attempt() {
             .collect::<Vec<_>>()
     });
     let near = As2Transport::new(format!("as2://{address}/as2"), PARTY, "Seller");
-    near.send_keyed("", b"order", KEY)
+    near.send_from("", transport::Outgoing::held(b"order").keyed(KEY))
         .expect("sent, its MDN verified");
-    near.send_keyed("", b"order", KEY).expect("sent again");
+    near.send_from("", transport::Outgoing::held(b"order").keyed(KEY))
+        .expect("sent again");
     near.send("", b"order").expect("sent unkeyed");
     let ids: Vec<String> = taking
         .join()
