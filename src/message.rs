@@ -48,7 +48,7 @@ impl Message {
 
     /// This message, its `Message-ID` formed from `key` where there is one
     /// ([`message_id_of`]): the same on every attempt of one delivery, which
-    /// a receiving Party recognises a message sent again by.
+    /// a receiving Party recognizes a message sent again by.
     #[must_use]
     pub fn keyed(self, key: Option<&str>) -> Self {
         match key {
@@ -144,7 +144,7 @@ fn requested_micalg(options: &str) -> Option<String> {
 }
 
 /// The MIC of an entity in `micalg`: RFC 4130 section 7.3.1, the digest
-/// over the content as it travelled. Only `sha-256` is spoken.
+/// over the content as it traveled. Only `sha-256` is spoken.
 ///
 /// # Errors
 /// Where `micalg` names a digest this crate does not compute.
