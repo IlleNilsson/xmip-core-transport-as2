@@ -20,7 +20,7 @@ A POST that is not this Party's AS2 message is answered `400` (or `503`) at once
 
 ## The deduplication key
 
-A keyed send (the key `Transport::send_from` is handed, `Outgoing::key`; built 2026-10-04) carries the Journey's identifier in the `Message-ID` header, `<key@xmip>` (`message::message_id_of`): RFC 5322's form, the right-hand side every message this crate sends carries, the same on every attempt of one Journey. A receiving Party detects a message sent again by its `Message-ID` (RFC 4130), and the MDN answers it. An unkeyed `send` carries one of its own, 128 random bits.
+A keyed send (the key `Transport::send_from` is handed, `Outgoing::key`; built 2026-10-04) carries the Journey's identifier in the `Message-ID` header, `<key@xmip>` (`message::message_id_of`): RFC 5322's form, the right-hand side every message this crate sends carries, the same on every attempt on one Journey. A receiving Party detects a message sent again by its `Message-ID` (RFC 4130), and the MDN answers it. An unkeyed `send` carries one of its own, 128 random bits.
 
 ## Toolchain
 

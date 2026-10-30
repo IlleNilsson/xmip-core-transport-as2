@@ -1,5 +1,5 @@
 //! A keyed send carries its deduplication key in the `Message-ID` header,
-//! `<key@xmip>`, the same on every attempt of one Journey, and the MDN
+//! `<key@xmip>`, the same on every attempt on one Journey, and the MDN
 //! answers it; an unkeyed send carries one of its own.
 
 use std::thread;
