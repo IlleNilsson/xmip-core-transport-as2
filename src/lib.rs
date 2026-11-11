@@ -177,13 +177,9 @@ impl As2Transport {
     }
 
     /// Where a target names the Party's endpoint itself, or is empty and
-    /// means the one configured.
+    /// means the one configured (`transport::destination::named`).
     fn resolve<'a>(&'a self, target: &'a str) -> &'a str {
-        if target.is_empty() {
-            &self.endpoint
-        } else {
-            target
-        }
+        transport::destination::named(target).unwrap_or(&self.endpoint)
     }
 
     /// The receipt the Party answered, checked against what was sent.
