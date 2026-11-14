@@ -6,7 +6,7 @@ Requests go on connections kept between them (`http::endpoint::Connections`, off
 
 A Receive Location keeps its listener, bound on the first receive, and the connections senders keep open on it (`http::inbound::Inbound`): each receive takes the next request from whichever sends first, where until 2026-09-27 each receive bound a listener of its own, answered one request with `Connection: close`, and refused a request that came between two receives. The peer an origin names comes from `http::server` (`serve_one_from`, and the `Inbound`), where AS2 accepted and read its own connection until then.
 
-The Party's endpoint is kept as written and read by `net::Endpoint` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net) under the schemes this technology declares — `as2://` is `http://`, `as2s://` is `https://`. Until 2026-09-28 an `as_http` function rewrote the URL before it was read.
+The Party's endpoint is kept as written and read by `net::Endpoint` in [xmip-core-library-net](https://github.com/IlleNilsson/xmip-core-library-net) under the schemes this technology declares — `as2://` is `http://`, `as2s://` is `https://`. Until 2026-09-28 an `as_http` function rewrote the URL before it was read. A Receive Location binds through `http::server::listen`: `as2://` in the clear, `as2s://` refused as asking for TLS, which no receive riding on HTTP terminates yet (ADR-0033, amendment 2026-11-13). A POST that is not this Party's message is answered at once, its caller turned away, and the receive goes on for the others (ADR-0018, amendment 2026-11-13).
 
 ## Acknowledged after the receive cycle
 

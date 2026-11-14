@@ -17,9 +17,9 @@ path = "src/lib.rs"
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md). The http technology is the carrier the manifest
 # declares: AS2 is an HTTP POST with Party headers, answered with an MDN,
-# and the request, the answer and the endpoint are read there. sha2 is the
-# MIC the MDN carries back (RFC 4130 section 7.3.1). Standard library
-# otherwise. The S/MIME signer the manifest names,
+# and the request, the answer and the endpoint are read there. The MIC the
+# MDN carries back (RFC 4130 section 7.3.1) is the estate's SHA-256
+# (codec::digest). Standard library otherwise. The S/MIME signer the manifest names,
 # xmip-core-authenticate-certificate, plugs in through the Signer trait.
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
 # The settings this technology declares (xcore::settings), read through
@@ -29,8 +29,7 @@ http = { package = "xmip-core-transport-http", git = "https://github.com/IlleNil
 # HTTP/1.1 on the wire (`net::http`) and the URL an endpoint is
 # (`net::Endpoint`): the one codec every technology riding on HTTP calls.
 net = { package = "xmip-core-library-net", git = "https://github.com/IlleNilsson/xmip-core-library-net", branch = "main" }
-sha2 = "0.11"
-# The estate's encoding primitives: the MIC in base 64.
+# The estate's encoding primitives: the MIC, and it in base 64.
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
 [lints.rust]

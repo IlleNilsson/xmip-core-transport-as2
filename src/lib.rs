@@ -41,7 +41,6 @@ use net::http::{Request, Response};
 use net::{Endpoint, Schemes};
 pub use signer::{Entity, Signer, Unsigned};
 use transport::error::{Result, TransportError, protocol_error};
-use transport::socket;
 use transport::{Acknowledgement, Arrived, Configured, Directions, Taken, Transport, Verdict};
 use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
 
@@ -104,12 +103,14 @@ impl As2Transport {
     }
 
     /// Bind at the endpoint's authority as the far end Parties post to,
-    /// and report the address actually assigned.
+    /// in the clear, and report the address actually assigned: `as2s://`
+    /// is refused as asking for TLS (`http::server::listen`).
     ///
     /// # Errors
-    /// Where the address is taken, malformed, or not permitted.
+    /// Where the address asks for TLS, is taken, malformed, or not
+    /// permitted.
     pub fn bind(&self) -> Result<(TcpListener, String)> {
-        socket::bind_tcp(&Endpoint::parse_under(&self.endpoint, &SCHEMES)?.address())
+        server::listen(&self.endpoint, &SCHEMES)
     }
 
     /// Accept one message on an already-bound listener and answer its MDN
@@ -139,13 +140,13 @@ impl As2Transport {
 
     /// What one POST from `peer` is heard as: a message that waits for its
     /// receipt, or a refusal answered at once with the status that says
-    /// why.
-    fn hear(&self, request: &Request, peer: SocketAddr) -> Heard<Result<Held>> {
+    /// why, its Party turned away while the receive goes on for the others.
+    fn hear(&self, request: &Request, peer: SocketAddr) -> Heard<Held> {
         match self.take(request, peer) {
-            Ok(heard) => Heard::Waiting(Ok(heard)),
+            Ok(heard) => Heard::Waiting(heard),
             Err(error) => {
                 let refusal = refusal(&error);
-                Heard::Answered(Err(error), refusal)
+                Heard::Refused(error, refusal)
             }
         }
     }
@@ -253,14 +254,15 @@ impl Transport for As2Transport {
     /// `processed/error:` and why, the final answer the Party does not send
     /// again after; on [`Verdict::Failed`] `503`, so the Party keeps the
     /// message and sends it again. A POST that is not this Party's message
-    /// is answered at once and returned as the error.
+    /// is answered at once, its Party turned away
+    /// ([`Transport::turned_away`]), and the receive goes on for the others.
     fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         let (heard, reply) = self.inbound.next(
             || self.bind(),
             self.timeout,
             |request, peer| self.hear(&request, peer),
         )?;
-        let (origin, body, receipt, sender) = heard?;
+        let (origin, body, receipt, sender) = heard;
         let reply = reply.ok_or_else(|| protocol_error("a message answered unheard"))?;
         let signer = Arc::clone(&self.signer);
         let acknowledgement = Acknowledgement::deferred(move |verdict| {
@@ -288,6 +290,12 @@ impl Transport for As2Transport {
     fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
         let bytes: &[u8] = &outgoing.gather()?;
         self.post(target, bytes, outgoing.key())
+    }
+
+    /// The Parties turned away at their own connection: a POST that is not
+    /// this Party's message, a head past its bound, a read past the timeout.
+    fn turned_away(&self) -> transport::Turned {
+        self.inbound.turned_away()
     }
 }
 
@@ -369,6 +377,7 @@ mod tests {
     use net::http::{read_request, write_response};
     use std::io::{Read, Write};
     use transport::loopback::Loopback;
+    use transport::socket;
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
@@ -445,6 +454,45 @@ mod tests {
             "one connection for every send"
         );
         assert_eq!(seller.inbound.open(), 1);
+    }
+
+    #[test]
+    fn a_receive_location_entered_as2s_never_listens_in_the_clear() {
+        let given = [(
+            "as2_id".to_string(),
+            xcore::settings::Given::Text("Seller".into()),
+        )];
+        let secure =
+            As2Transport::open("as2s://127.0.0.1:0/as2", Applies::Receive, &given).expect("built");
+        let refused = secure.bind().expect_err("no TLS termination yet");
+        assert!(!refused.retryable, "{refused}");
+        assert!(
+            refused
+                .message
+                .contains("enter it as as2://127.0.0.1:0/as2"),
+            "{refused}"
+        );
+        let error = secure.receive().expect_err("nothing served in the clear");
+        assert!(error.message.contains("asks for TLS"), "{error}");
+    }
+
+    #[test]
+    fn a_post_that_is_not_this_partys_message_turns_its_caller_away_and_the_next_is_taken() {
+        let (seller, _, _) = far_end();
+        let address = seller.inbound.bound(|| seller.bind()).expect("bound");
+        let at = format!("as2://{address}/as2");
+        let parties = std::thread::spawn(move || {
+            let stranger = As2Transport::new(&at, "Stranger", "Nobody").timing_out_after(secs(2));
+            stranger
+                .send("", b"ISA")
+                .expect_err("not addressed to the Seller");
+            let buyer = As2Transport::new(&at, "Buyer", "Seller").timing_out_after(secs(2));
+            buyer.send("", b"ISA").expect("receipted");
+        });
+        assert_eq!(taken(&seller).bytes, b"ISA", "the Location went on");
+        parties.join().expect("parties");
+        let turned = seller.turned_away();
+        assert_eq!(turned.callers.len(), 1, "{turned:?}");
     }
 
     /// The one message the next receive takes, accepted.
