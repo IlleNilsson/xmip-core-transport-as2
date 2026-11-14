@@ -369,6 +369,12 @@ impl Configured for As2Transport {
             None => transport,
         })
     }
+
+    /// Each caller's turn on a Receive Location taking at most `turn`.
+    fn turning_within(mut self, turn: Duration) -> Self {
+        self.inbound = self.inbound.turning_within(turn);
+        self
+    }
 }
 
 #[cfg(test)]
