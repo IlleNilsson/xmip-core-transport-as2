@@ -10,7 +10,6 @@
 use codec::{hex, random};
 
 use net::http::Request;
-use sha2::{Digest, Sha256};
 use transport::error::{Result, protocol_error};
 
 use crate::signer::Entity;
@@ -150,7 +149,7 @@ fn requested_micalg(options: &str) -> Option<String> {
 /// Where `micalg` names a digest this crate does not compute.
 pub fn mic(micalg: &str, body: &[u8]) -> Result<Vec<u8>> {
     match micalg.to_ascii_lowercase().as_str() {
-        "sha-256" | "sha256" => Ok(Sha256::digest(body).to_vec()),
+        "sha-256" | "sha256" => Ok(codec::digest::sha256(body).to_vec()),
         other => Err(protocol_error(format!(
             "a receipt digest this transport does not compute: {other}"
         ))),
