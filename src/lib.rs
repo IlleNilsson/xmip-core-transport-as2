@@ -95,13 +95,6 @@ impl As2Transport {
         self
     }
 
-    /// Give up on a Party that stops mid-message.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
     /// Bind at the endpoint's authority as the far end Parties post to,
     /// in the clear, and report the address actually assigned: `as2s://`
     /// is refused as asking for TLS (`http::server::listen`).
@@ -338,14 +331,12 @@ impl Configured for As2Transport {
                 meaning: "The AS2 name of the Party sent to, written as AS2-To.",
                 applies: Applies::Send,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Optional,
-                meaning: "How long a Party that stops mid-message is waited on; unbounded \
-                          when left out.",
-                applies: Applies::Both,
-            },
+            transport::configured::timeout(
+                Applies::Both,
+                None,
+                "How long a Party that stops mid-message is waited on; unbounded \
+                 when left out.",
+            ),
         ],
     };
 
@@ -357,17 +348,17 @@ impl Configured for As2Transport {
         address
     }
 
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        Some(&mut self.timeout)
+    }
+
     fn configured(address: &str, settings: &xcore::settings::Read) -> Result<Self> {
         // Unsigned until the Location's credentials supply the certificate.
-        let transport = Self::new(
+        Ok(Self::new(
             address,
             settings.text("as2_id"),
             settings.optional_text("to_party_id").unwrap_or_default(),
-        );
-        Ok(match settings.optional_duration("timeout") {
-            Some(timeout) => transport.timing_out_after(timeout),
-            None => transport,
-        })
+        ))
     }
 
     /// Each caller's turn on a Receive Location taking at most `turn`.
