@@ -240,7 +240,7 @@ impl Transport for As2Transport {
     }
 
     /// The next message from whichever Party posts first, on the listener
-    /// the first receive bound and the connections Parties keep.
+    /// its open bound and the connections Parties keep.
     ///
     /// The Party waits for its answer until the receive cycle has ended
     /// (`receipt::Receipt::answer`): on [`Verdict::Accepted`] the MDN
@@ -251,11 +251,9 @@ impl Transport for As2Transport {
     /// is answered at once, its Party turned away
     /// ([`Transport::turned_away`]), and the receive goes on for the others.
     fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
-        let (heard, reply) = self.inbound.next(
-            || self.bind(),
-            self.timeout,
-            |request, peer| self.hear(&request, peer),
-        )?;
+        let (heard, reply) = self
+            .inbound
+            .next(self.timeout, |request, peer| self.hear(&request, peer))?;
         let (origin, body, receipt, sender) = heard;
         let reply = reply.ok_or_else(|| protocol_error("a message answered unheard"))?;
         let signer = Arc::clone(&self.signer);
@@ -375,6 +373,12 @@ impl Configured for As2Transport {
         self.connections = self.connections.timed_by(clock);
         self
     }
+
+    /// The listener every receive takes from, bound where a Receive
+    /// Location listens ([`As2Transport::bind`]).
+    fn listening(&self) -> Result<Option<&str>> {
+        self.inbound.bound(|| self.bind()).map(Some)
+    }
 }
 
 #[cfg(test)]
@@ -478,7 +482,8 @@ mod tests {
                 .contains("enter it as as2://127.0.0.1:0/as2"),
             "{refused}"
         );
-        let error = secure.receive().expect_err("nothing served in the clear");
+        // Refused as its transport is opened, so the node's start is.
+        let error = secure.listening().expect_err("nothing served in the clear");
         assert!(error.message.contains("asks for TLS"), "{error}");
     }
 
