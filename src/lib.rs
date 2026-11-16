@@ -114,7 +114,8 @@ impl As2Transport {
     /// was addressed to some other Party — each answered with the status
     /// that says so before the error is returned.
     pub fn accept_one(&self, listener: &TcpListener) -> Result<Taken> {
-        server::serve_one_from(listener, self.timeout, |request, peer| {
+        let clock = Arc::clone(self.connections.clock());
+        server::serve_one_from(listener, self.timeout, clock, |request, peer| {
             let answered = self
                 .take(request, peer)
                 .and_then(|(origin, body, receipt, sender)| {
