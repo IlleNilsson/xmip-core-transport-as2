@@ -22,6 +22,10 @@ A POST that is not this Party's AS2 message is answered `400` (or `503`) at once
 
 A keyed send (the key `Transport::send_from` is handed, `Outgoing::key`; built 2026-10-04) carries the Journey's identifier in the `Message-ID` header, `<key@xmip>` (`message::message_id_of`): RFC 5322's form, the right-hand side every message this crate sends carries, the same on every attempt on one Journey. A receiving Party detects a message sent again by its `Message-ID` (RFC 4130), and the MDN answers it. An unkeyed `send` carries one of its own, 128 random bits.
 
+## The declaration
+
+What a Location of this technology is configured with is two `const`s in its `declaration` module, `src/declaration.rs`, beside the code, which `Configured` reads (ADR-0064, amendment 2026-11-26): `declaration::SETTINGS`, `as2_id`, `to_party_id` and `timeout`, and `SCHEMES`, `as2` and `as2s`. Built with its `declaration` feature alone (`--no-default-features --features declaration`), the crate is those and nothing more: its code and every crate the code is built on — the http technology, and with it TLS — are behind the default feature, and `tls`, which is code, turns the default on with it. So the library the surfaces load can carry it without the code, for the language server and the desktop to suggest and check an AS2 Location's settings though no node in their process loaded the technology, once the gathering crate of open problem 48 links it. `test/Declaration.Test.ps1` in the estate holds that the declaration builds nothing the transport capability does not.
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it

@@ -21,42 +21,64 @@
 //!
 //! The origin URI carries what the headers knew:
 //! `as2://peer/path?from=Buyer&message-id=1.2@buyer`.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod loopback;
+#[cfg(feature = "default")]
 pub mod mdn;
+#[cfg(feature = "default")]
 pub mod message;
+#[cfg(feature = "default")]
 mod receipt;
+#[cfg(feature = "default")]
 pub mod signer;
 
-use std::net::{SocketAddr, TcpListener};
-use std::sync::Arc;
-use std::time::Duration;
+#[cfg(feature = "default")]
+use std::{net::SocketAddr, net::TcpListener, sync::Arc, time::Duration};
 
-use http::endpoint::{Connections, Offer};
-use http::inbound::{Heard, Inbound};
-use http::server;
+#[cfg(feature = "default")]
+use http::{endpoint::Connections, endpoint::Offer, inbound::Heard, inbound::Inbound, server};
+#[cfg(feature = "default")]
 pub use mdn::Mdn;
+#[cfg(feature = "default")]
 pub use message::Message;
+#[cfg(feature = "default")]
 use net::http::{Request, Response};
+#[cfg(feature = "default")]
 use net::{Endpoint, Schemes};
+#[cfg(feature = "default")]
 pub use signer::{Entity, Signer, Unsigned};
+#[cfg(feature = "default")]
 use transport::error::{Result, TransportError, protocol_error};
+#[cfg(feature = "default")]
 use transport::{Acknowledgement, Arrived, Configured, Directions, Taken, Transport, Verdict};
-use xcore::settings::{Applies, Kind, Presence, Setting, Settings};
+#[cfg(feature = "default")]
+use xcore::settings::Settings;
 
+#[cfg(feature = "default")]
 use crate::receipt::Receipt;
 
 /// A message heard: its origin, its entity's body unwrapped, the receipt
 /// it earns, and what the request said of its sender.
+#[cfg(feature = "default")]
 type Held = (String, Vec<u8>, Receipt, server::Sender);
 
 /// What a POST that is not this Party's AS2 message is answered: `503`
 /// where saying it again may succeed, `400` where it will not.
+#[cfg(feature = "default")]
 fn refusal(error: &TransportError) -> Response {
     let status = if error.retryable { 503 } else { 400 };
     Response::new(status).body(error.message.as_bytes())
 }
 
+#[cfg(feature = "default")]
 pub struct As2Transport {
     /// The Party's endpoint to send to, or the address to listen at.
     endpoint: String,
@@ -71,6 +93,7 @@ pub struct As2Transport {
     inbound: Inbound,
 }
 
+#[cfg(feature = "default")]
 impl As2Transport {
     /// Speak as Party `me` to Party `party` at `endpoint` —
     /// `http://host:port/as2` or `as2://host:port/as2` — unsigned until
@@ -215,11 +238,13 @@ impl As2Transport {
 
 /// The schemes a Party's endpoint is written in: `as2://` is `http://`
 /// on the wire, and `as2s://` is `https://`.
+#[cfg(feature = "default")]
 const SCHEMES: Schemes = Schemes {
     plain: &["http", "as2"],
     secure: &["https", "as2s"],
 };
 
+#[cfg(feature = "default")]
 impl Transport for As2Transport {
     fn name(&self) -> &'static str {
         "as2"
@@ -291,6 +316,7 @@ impl Transport for As2Transport {
     }
 }
 
+#[cfg(feature = "default")]
 impl As2Transport {
     /// The one send: one message posted to the Party and its MDN verified.
     fn post(&self, target: &str, bytes: &[u8], key: Option<&str>) -> Result<()> {
@@ -308,39 +334,10 @@ impl As2Transport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Configured for As2Transport {
-    /// The address is the Party's endpoint a Send Location posts to, or
-    /// the one a Receive Location listens at: `as2://host:port/as2`. The
-    /// S/MIME certificate is the Location's credentials, not a setting.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "as2_id",
-                kind: Kind::Text,
-                presence: Presence::Required,
-                meaning: "This Party's own AS2 name: AS2-From on a send, the AS2-To a \
-                          received message must carry.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "to_party_id",
-                kind: Kind::Text,
-                presence: Presence::Required,
-                meaning: "The AS2 name of the Party sent to, written as AS2-To.",
-                applies: Applies::Send,
-            },
-            transport::configured::timeout(
-                Applies::Both,
-                None,
-                "How long a Party that stops mid-message is waited on; unbounded \
-                 when left out.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["as2", "as2s"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     /// The whole address: its scheme says whether TLS guards the endpoint.
     fn own_terms(address: &str) -> &str {
@@ -388,6 +385,7 @@ mod tests {
     use std::io::{Read, Write};
     use transport::loopback::Loopback;
     use transport::socket;
+    use xcore::settings::Applies;
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
